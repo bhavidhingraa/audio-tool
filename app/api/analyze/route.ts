@@ -18,18 +18,23 @@ export async function POST(req: NextRequest) {
     }
 
     const appAccessKey = process.env.APP_ACCESS_KEY;
-    if (appAccessKey !== undefined && appAccessKey !== "") {
-      if (!accessKey || accessKey !== appAccessKey) {
+    const isLocalDev = process.env.NODE_ENV === "development" ||
+      req.headers.get("origin")?.includes("localhost");
+
+    if (!isLocalDev) {
+      if (appAccessKey !== undefined && appAccessKey !== "") {
+        if (!accessKey || accessKey !== appAccessKey) {
+          return NextResponse.json(
+            { error: "Invalid access key" },
+            { status: 401 }
+          );
+        }
+      } else {
         return NextResponse.json(
-          { error: "Invalid access key" },
-          { status: 401 }
+          { error: "App is disabled" },
+          { status: 403 }
         );
       }
-    } else {
-      return NextResponse.json(
-        { error: "App is disabled" },
-        { status: 403 }
-      );
     }
 
     const baseUrl = process.env.ANTHROPIC_BASE_URL;
