@@ -168,7 +168,7 @@ ${transcript}`;
       }
     }
 
-    return NextResponse.json({ cuts });
+    return NextResponse.json({ cuts: cuts.map(normalizeCut) });
   } catch (err) {
     console.error("[Analyze] Unexpected error:", err);
     return NextResponse.json(
@@ -176,4 +176,32 @@ ${transcript}`;
       { status: 500 }
     );
   }
+}
+
+function parseTimestamp(ts: string): { startTime: number; endTime: number } {
+  // Handle "0:49 - 0:51" or "0:49-0:51" format
+  const match = ts.match(/(\d+):(\d+)(?::(\d+))?\s*[-–]\s*(\d+):(\d+)(?::(\d+))?/);
+  if (!match) return { startTime: 0, endTime: 0 };
+
+  const startSecs = match[3]
+    ? parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseInt(match[3])
+    : parseInt(match[1]) * 60 + parseInt(match[2]);
+
+  const endSecs = match[6]
+    ? parseInt(match[4]) * 3600 + parseInt(match[5]) * 60 + parseInt(match[6])
+    : parseInt(match[4]) * 60 + parseInt(match[5]);
+
+  return { startTime: startSecs, endTime: endSecs };
+}
+
+function normalizeCut(cut: any) {
+  const { startTime, endTime } = parseTimestamp(cut.timestamp || "0:00 - 0:00");
+  return {
+    timestamp: cut.timestamp,
+    startTime,
+    endTime,
+    original: cut.original,
+    suggestedCut: cut.suggestedCut,
+    reason: cut.reason,
+  };
 }
