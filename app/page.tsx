@@ -250,10 +250,16 @@ export default function Home() {
 
       {error && <div style={styles.error}>{error}</div>}
 
-      {results.length > 0 && (
+      {results.length > 0 && (() => {
+            const totalCutTime = results.reduce((sum, c) => sum + (c.endTime - c.startTime), 0);
+            const selectedCutTime = results.reduce((sum, c, i) =>
+              selectedCuts.has(i) ? sum + (c.endTime - c.startTime) : sum, 0);
+            const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+            return (
         <section style={styles.resultsSection}>
           <h2 style={styles.resultsTitle}>
-            Suggested Cuts ({results.length}) — all selected by default
+            Suggested Cuts ({results.length}) — {formatTime(selectedCutTime)} to cut {selectedCutTime !== totalCutTime && `(of ${formatTime(totalCutTime)} total)`}
           </h2>
           <div style={styles.resultsList}>
             {results.map((cut, i) => (
@@ -292,7 +298,8 @@ export default function Home() {
             ))}
           </div>
         </section>
-      )}
+            );
+          })()}
 
       {results.length > 0 && (
         <section style={styles.actionSection}>
