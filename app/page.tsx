@@ -211,20 +211,6 @@ export default function Home() {
         <audio controls src={audioUrl} style={styles.audioPlayer} />
       )}
 
-      <section style={styles.keySection}>
-        {storedKey ? (
-          <span style={styles.keyLabel}>Key saved</span>
-        ) : (
-          <input
-            type="password"
-            placeholder="Access key"
-            value={accessKey}
-            onChange={(e) => setAccessKey(e.target.value)}
-            style={styles.input}
-          />
-        )}
-      </section>
-
       <section style={styles.inputSection}>
         <textarea
           placeholder="Paste transcript here... (Tip: Include timestamps if available)"
