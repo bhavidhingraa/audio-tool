@@ -130,8 +130,11 @@ ${transcript}`;
       text = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
     }
 
-    console.log("[Analyze] Parsed text preview:", text.substring(0, 500));
+    // Truncate if text seems incomplete (trailing comma, unclosed brackets)
+    const lastChars = text.slice(-50).replace(/\n/g, " ");
+    console.log("[Analyze] Text tail:", lastChars);
 
+    // Attempt JSON parse, handle incomplete responses
     let cuts;
     try {
       cuts = JSON.parse(text);
@@ -141,12 +144,28 @@ ${transcript}`;
       }
       console.log("[Analyze] Success, cuts:", cuts.length);
     } catch (parseError) {
-      console.error("[Analyze] JSON parse error:", parseError);
-      console.error("[Analyze] Raw text:", text);
-      return NextResponse.json(
-        { error: "Failed to parse AI response", raw: text },
-        { status: 500 }
-      );
+      // Try to extract first complete JSON array from the text
+      const jsonMatch = text.match(/\[[\s\S]*?\]\s*/);
+      if (jsonMatch) {
+        try {
+          cuts = JSON.parse(jsonMatch[0]);
+          console.log("[Analyze] Partial parse success, cuts:", cuts.length);
+        } catch {
+          console.error("[Analyze] JSON parse error:", parseError);
+          console.error("[Analyze] Raw text:", text);
+          return NextResponse.json(
+            { error: "Failed to parse AI response", raw: text.substring(0, 1000) },
+            { status: 500 }
+          );
+        }
+      } else {
+        console.error("[Analyze] JSON parse error:", parseError);
+        console.error("[Analyze] Raw text:", text);
+        return NextResponse.json(
+          { error: "Failed to parse AI response", raw: text.substring(0, 1000) },
+          { status: 500 }
+        );
+      }
     }
 
     return NextResponse.json({ cuts });
