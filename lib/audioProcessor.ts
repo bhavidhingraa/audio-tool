@@ -37,21 +37,30 @@ export async function processAudio(
   cuts: Cut[],
   onProgress?: (progress: number) => void
 ): Promise<Blob> {
+  console.log("[processAudio] audioData length:", audioData.length);
+  console.log("[processAudio] cuts:", JSON.stringify(cuts));
+  console.log("[processAudio] audioData length:", audioData.length);
+  console.log("[processAudio] cuts:", JSON.stringify(cuts));
+
   const ff = await loadFFmpeg(onProgress);
 
   const inputName = "input.mp3";
   const outputName = "output.mp3";
 
   await ff.writeFile(inputName, audioData);
+  console.log("[processAudio] wrote input file");
 
   const sortedCuts = [...cuts].sort((a, b) => a.startTime - b.startTime);
+  console.log("[processAudio] sorted cuts:", sortedCuts);
 
   const keepSegments: string[] = [];
   let cursor = 0;
 
   for (const cut of sortedCuts) {
+    console.log(`[processAudio] cut: cursor=${cursor}, start=${cut.startTime}, end=${cut.endTime}`);
     if (cursor < cut.startTime) {
       const segName = `keep_${keepSegments.length}.mp3`;
+      console.log(`[processAudio] extracting keep segment: ${segName} from ${cursor} to ${cut.startTime}`);
       await ff.exec([
         "-i", inputName,
         "-ss", cursor.toString(),
@@ -66,6 +75,7 @@ export async function processAudio(
 
   if (cursor > 0) {
     const segName = `keep_${keepSegments.length}.mp3`;
+    console.log(`[processAudio] extracting final segment: ${segName} from ${cursor} to end`);
     await ff.exec([
       "-i", inputName,
       "-ss", cursor.toString(),
@@ -75,15 +85,20 @@ export async function processAudio(
     keepSegments.push(segName);
   }
 
+  console.log("[processAudio] keepSegments count:", keepSegments.length);
+
   if (keepSegments.length === 0) {
+    console.log("[processAudio] no segments extracted, returning original");
     const data = await ff.readFile(inputName);
     const uint8 = new Uint8Array(data as Uint8Array);
     return new Blob([uint8.buffer as ArrayBuffer], { type: "audio/mpeg" });
   }
 
   const concatList = keepSegments.map((_, i) => `file 'keep_${i}.mp3'`).join("\n");
+  console.log("[processAudio] concat list:", concatList);
   await ff.writeFile("concat.txt", concatList);
 
+  console.log("[processAudio] running concat...");
   await ff.exec([
     "-f", "concat",
     "-safe", "0",
@@ -94,6 +109,7 @@ export async function processAudio(
 
   const data = await ff.readFile(outputName);
   const uint8Out = new Uint8Array(data as Uint8Array);
+  console.log("[processAudio] output size:", uint8Out.length);
 
   await ff.deleteFile(inputName);
   await ff.deleteFile(outputName);

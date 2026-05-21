@@ -49,44 +49,67 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const prompt = `You are an expert audio editor. Analyze the following transcript and identify ONLY significant sections to cut that would meaningfully reduce audio length while preserving the essence and flow.
+    const prompt = `You are an expert podcast and audio editor. Your job is to aggressively trim audio transcripts while keeping the core essence and flow intact.
 
-For each cut provide:
-- timestamp: timestamp range from the transcript (e.g., "0:15 - 0:22") or "N/A" if no timestamp
-- original: the exact text to cut
-- suggestedCut: brief description of what to cut or remove
-- reason: why this should be cut (be specific)
+## Your Task
+Analyze the transcript below. Identify sections to CUT. Return a JSON array of cuts.
 
-ONLY suggest cuts that meet ALL of these criteria:
-- Redundant explanations already covered elsewhere
-- Extended filler sequences (multiple "um", "uh", "like" in a row)
-- Tangents that don't add value to the main topic
-- Repeated points stated identically or nearly identically
-- False starts / self-corrections that are substantial
-- Wordy phrases that could be meaningfully shortened
+## Output Format
+Return ONLY a valid JSON array, no markdown, no explanation, no thinking. Cuts MUST be in chronological order (sorted by start time). Each cut object:
+{
+  "timestamp": "0:00 - 0:40",
+  "original": "exact text being cut",
+  "suggestedCut": "brief description of the cut",
+  "reason": "specific reason why this should be cut"
+}
 
-DO NOT suggest cuts for:
-- Individual filler words or single occurrences
-- Minor verbal habits
-- Conversational transitions that maintain flow
-- Technical explanations that add value
+## What to Cut — Cut aggressively
 
-Be conservative - only flag truly significant cuts. Prefer fewer, more impactful suggestions over many small ones.
+**1. Padding & Filler**
+- Long intros (setting scenes, describing nervousness, etc.)
+- Verbal filler: "you know", "like", "basically", "honestly", "I mean", "right?", "yeah", repeated back-and-forth affirmatives ("Oh, OK", "Exactly", "Totally", "Yeah")
+- Speculative/hedging buildup before getting to the point ("I feel like...", "So I kind of want to...", "I don't know if this is the right way to...")
 
-Return ONLY a valid JSON array with no additional text, thinking, or markup. Example format:
-[
-  {
-    "timestamp": "1:23 - 1:30",
-    "original": "I think maybe possibly we should...",
-    "suggestedCut": "Remove speculative filler",
-    "reason": "Repeated hedge words add no value"
-  }
-]
+**2. Verbose Explanations**
+- Analogies or examples that are repeated or stretched beyond their value
+- Walkthroughs that re-explain something already explained in the previous 2 minutes
+- Meta-commentary about what you're about to explain vs. the actual explanation
+
+**3. Conversational Overhead**
+- Roleplay exchanges that only confirm understanding ("Oh, I see", "That makes sense", "Right?", "Exactly")
+- Interviewer asking obvious questions just to lead into content (cut the setup, keep the content)
+- Celebrations of having solved something ("Phew, nailed it", "That was great", "You really did")
+
+**4. Tangential or Bonus Content**
+- Philosophical musings, "thought for you to mull over" wrap-ups
+- Content that goes beyond the core technical/material (e.g., applying concepts to "your morning routine" or "genetics")
+- Extended closings that repeat the summary
+
+**5. Edge Case Dumps**
+- Long lists of "what if" constraints fired rapidly without adding new insight
+- Rapid-fire Q&A that just confirms edge case handling (if the solution was already explained)
+
+## What NOT to Cut
+- Technical explanations, even complex ones
+- Analogies that are vivid and irreplaceable
+- The core solution walkthrough
+- Insightful trade-off discussions
+- Any section where the "why we do it this way" is genuinely explained
+
+## Process
+1. Parse timestamps. Note the total audio duration.
+2. Divide the transcript into narrative sections (intro, core explanation, variations, wrap-up).
+3. For each section, estimate how much time it takes and judge if that matches its value.
+4. Calculate total time saved by applying ALL suggested cuts.
+5. Return cuts that collectively save 25-40% of the total length, focusing on the highest-value cuts.
+
+## Example Cut Thinking
+- 0:00-0:40 (40s intro): "Picture this, sterile room, sweating palms..." → descriptive scene-setting that takes 40s before problem is named. CUT.
+- 5:40-6:37 (57s): Full Big-O breakdown of why sort is O(n log n) → reader/listener doesn't need the CS-101 derivation after the bottleneck is stated. CUT.
+- 18:58-19:55 (57s): Philosophical ending applying anagrams to genetics/morning routines → beautiful but adds 57s of non-technical content. CUT.
 
 TRANSCRIPT:
 ${transcript}`;
-
-    console.log("[Analyze] Calling API:", `${baseUrl}/v1/chat/completions`);
 
     const response = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
@@ -97,16 +120,13 @@ ${transcript}`;
       body: JSON.stringify({
         model: model,
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 8192,
+        max_tokens: 16000,
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
 
-    console.log("[Analyze] Response status:", response.status);
-
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("[Analyze] API error:", response.status, errorText);
       return NextResponse.json(
         { error: `API error: ${response.status}`, details: errorText },
         { status: 500 }
@@ -114,10 +134,7 @@ ${transcript}`;
     }
 
     const data = await response.json();
-    console.log("[Analyze] Data keys:", Object.keys(data));
-    
     let text = data.choices?.[0]?.message?.content || "";
-    console.log("[Analyze] Raw text length:", text.length);
 
     // Strip markdown code block markers
     text = text.replace(/^```json\s*/i, "").replace(/\s*```$/i, "");
@@ -130,37 +147,26 @@ ${transcript}`;
       text = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
     }
 
-    // Truncate if text seems incomplete (trailing comma, unclosed brackets)
-    const lastChars = text.slice(-50).replace(/\n/g, " ");
-    console.log("[Analyze] Text tail:", lastChars);
-
     // Attempt JSON parse, handle incomplete responses
     let cuts;
     try {
       cuts = JSON.parse(text);
       if (!Array.isArray(cuts)) {
-        console.error("[Analyze] Not an array, type:", typeof cuts);
         throw new Error("Not an array");
       }
-      console.log("[Analyze] Success, cuts:", cuts.length);
-    } catch (parseError) {
+    } catch {
       // Try to extract first complete JSON array from the text
       const jsonMatch = text.match(/\[[\s\S]*?\]\s*/);
       if (jsonMatch) {
         try {
           cuts = JSON.parse(jsonMatch[0]);
-          console.log("[Analyze] Partial parse success, cuts:", cuts.length);
         } catch {
-          console.error("[Analyze] JSON parse error:", parseError);
-          console.error("[Analyze] Raw text:", text);
           return NextResponse.json(
             { error: "Failed to parse AI response", raw: text.substring(0, 1000) },
             { status: 500 }
           );
         }
       } else {
-        console.error("[Analyze] JSON parse error:", parseError);
-        console.error("[Analyze] Raw text:", text);
         return NextResponse.json(
           { error: "Failed to parse AI response", raw: text.substring(0, 1000) },
           { status: 500 }
@@ -168,9 +174,9 @@ ${transcript}`;
       }
     }
 
-    return NextResponse.json({ cuts: cuts.map(normalizeCut) });
+    const normalizedCuts = cuts.map((c: any) => parseCut(c));
+    return NextResponse.json({ cuts: normalizedCuts });
   } catch (err) {
-    console.error("[Analyze] Unexpected error:", err);
     return NextResponse.json(
       { error: "Internal server error", details: String(err) },
       { status: 500 }
@@ -179,7 +185,6 @@ ${transcript}`;
 }
 
 function parseTimestamp(ts: string): { startTime: number; endTime: number } {
-  // Handle "0:49 - 0:51" or "0:49-0:51" format
   const match = ts.match(/(\d+):(\d+)(?::(\d+))?\s*[-–]\s*(\d+):(\d+)(?::(\d+))?/);
   if (!match) return { startTime: 0, endTime: 0 };
 
@@ -194,7 +199,7 @@ function parseTimestamp(ts: string): { startTime: number; endTime: number } {
   return { startTime: startSecs, endTime: endSecs };
 }
 
-function normalizeCut(cut: any) {
+function parseCut(cut: any) {
   const { startTime, endTime } = parseTimestamp(cut.timestamp || "0:00 - 0:00");
   return {
     timestamp: cut.timestamp,
