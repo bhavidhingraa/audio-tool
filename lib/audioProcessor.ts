@@ -2,6 +2,7 @@ import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { toBlobURL } from "@ffmpeg/util";
 
 export interface Cut {
+  timestamp?: string;
   startTime: number;
   endTime: number;
   original: string;
@@ -76,7 +77,8 @@ export async function processAudio(
 
   if (keepSegments.length === 0) {
     const data = await ff.readFile(inputName);
-    return new Blob([data], { type: "audio/mpeg" });
+    const uint8 = new Uint8Array(data as Uint8Array);
+    return new Blob([uint8.buffer as ArrayBuffer], { type: "audio/mpeg" });
   }
 
   const concatList = keepSegments.map((_, i) => `file 'keep_${i}.mp3'`).join("\n");
@@ -91,6 +93,7 @@ export async function processAudio(
   ]);
 
   const data = await ff.readFile(outputName);
+  const uint8Out = new Uint8Array(data as Uint8Array);
 
   await ff.deleteFile(inputName);
   await ff.deleteFile(outputName);
@@ -99,7 +102,7 @@ export async function processAudio(
   }
   await ff.deleteFile("concat.txt");
 
-  return new Blob([data], { type: "audio/mpeg" });
+  return new Blob([uint8Out.buffer as ArrayBuffer], { type: "audio/mpeg" });
 }
 
 export function timestampToSeconds(timestamp: string): number {

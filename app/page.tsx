@@ -140,6 +140,20 @@ export default function Home() {
     setSelectedCuts(newSelected);
   };
 
+  const handleSaveKey = () => {
+    if (accessKey) {
+      localStorage.setItem("audio-trimmer-key", accessKey);
+      setStoredKey(accessKey);
+      setShowKeyInput(false);
+    }
+  };
+
+  const handleClearKey = () => {
+    localStorage.removeItem("audio-trimmer-key");
+    setStoredKey(null);
+    setAccessKey("");
+  };
+
   return (
     <main style={styles.main}>
       <header style={styles.header}>
@@ -304,20 +318,6 @@ export default function Home() {
     </main>
   );
 }
-
-const handleSaveKey = () => {
-  if (accessKey) {
-    localStorage.setItem("audio-trimmer-key", accessKey);
-    setStoredKey(accessKey);
-    setShowKeyInput(false);
-  }
-};
-
-const handleClearKey = () => {
-  localStorage.removeItem("audio-trimmer-key");
-  setStoredKey(null);
-  setAccessKey("");
-};
 
 const styles: { [key: string]: React.CSSProperties } = {
   main: {
