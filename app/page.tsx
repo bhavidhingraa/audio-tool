@@ -1,28 +1,29 @@
 "use client";
 
-import { useState, useEffect } from "react";
-
-interface Cut {
-  timestamp: string;
-  original: string;
-  suggestedCut: string;
-  reason: string;
-}
+import { useState, useEffect, useRef } from "react";
+import { loadFFmpeg, processAudio, type Cut } from "../lib/audioProcessor";
 
 interface AnalyzeResponse {
   cuts: Cut[];
   error?: string;
-  raw?: string;
 }
 
 export default function Home() {
-  const [transcript, setTranscript] = useState("");
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [accessKey, setAccessKey] = useState("");
   const [storedKey, setStoredKey] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState("");
   const [results, setResults] = useState<Cut[]>([]);
+  const [selectedCuts, setSelectedCuts] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
   const [error, setError] = useState("");
   const [showKeyInput, setShowKeyInput] = useState(false);
+  const [ffmpegLoaded, setFfmpegLoaded] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dropZoneRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem("audio-trimmer-key");
@@ -30,11 +31,29 @@ export default function Home() {
       setStoredKey(saved);
       setAccessKey(saved);
     }
+
+    loadFFmpeg().then(() => setFfmpegLoaded(true)).catch(console.error);
   }, []);
+
+  const handleFileChange = (file: File) => {
+    if (!file) return;
+    setAudioFile(file);
+    setAudioUrl(URL.createObjectURL(file));
+    setError("");
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file && (file.type.startsWith("audio/") || file.name.match(/\.(mp3|m4a|wav|ogg)$/i))) {
+      handleFileChange(file);
+    }
+  };
 
   const handleAnalyze = async () => {
     setError("");
     setResults([]);
+    setSelectedCuts(new Set());
 
     const keyToUse = accessKey || storedKey || "";
 
@@ -53,13 +72,8 @@ export default function Home() {
     try {
       const res = await fetch("/api/analyze", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          transcript,
-          accessKey: keyToUse,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript, accessKey: keyToUse }),
       });
 
       const data: AnalyzeResponse = await res.json();
@@ -71,6 +85,7 @@ export default function Home() {
 
       if (data.cuts && Array.isArray(data.cuts)) {
         setResults(data.cuts);
+        setSelectedCuts(new Set(data.cuts.map((_, i) => i)));
       }
     } catch {
       setError("Network error");
@@ -79,18 +94,50 @@ export default function Home() {
     }
   };
 
-  const handleSaveKey = () => {
-    if (accessKey) {
-      localStorage.setItem("audio-trimmer-key", accessKey);
-      setStoredKey(accessKey);
-      setShowKeyInput(false);
+  const handleExport = async () => {
+    if (!audioFile) {
+      setError("Audio file required");
+      return;
+    }
+
+    const cutsToApply = Array.from(selectedCuts).map(i => results[i]);
+    if (cutsToApply.length === 0) {
+      setError("No cuts selected");
+      return;
+    }
+
+    setExporting(true);
+    setExportProgress(0);
+    setError("");
+
+    try {
+      const audioData = new Uint8Array(await audioFile.arrayBuffer());
+
+      const blob = await processAudio(audioData, cutsToApply, (progress) => {
+        setExportProgress(progress);
+      });
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `trimmed_${audioFile.name.replace(/\.[^.]+$/, ".mp3")}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(`Export failed: ${err}`);
+    } finally {
+      setExporting(false);
     }
   };
 
-  const handleClearKey = () => {
-    localStorage.removeItem("audio-trimmer-key");
-    setStoredKey(null);
-    setAccessKey("");
+  const toggleCut = (index: number) => {
+    const newSelected = new Set(selectedCuts);
+    if (newSelected.has(index)) {
+      newSelected.delete(index);
+    } else {
+      newSelected.add(index);
+    }
+    setSelectedCuts(newSelected);
   };
 
   return (
@@ -101,37 +148,72 @@ export default function Home() {
           {storedKey ? (
             <div style={styles.keySaved}>
               <span style={styles.keyLabel}>Key saved</span>
-              <button onClick={handleClearKey} style={styles.keyButton}>
-                Clear
-              </button>
+              <button onClick={handleClearKey} style={styles.keyButton}>Clear</button>
             </div>
           ) : showKeyInput ? (
             <div style={styles.keyInput}>
-              <input
-                type="password"
-                placeholder="Access key"
-                value={accessKey}
-                onChange={(e) => setAccessKey(e.target.value)}
-                style={styles.input}
-              />
-              <button onClick={handleSaveKey} style={styles.keyButton}>
-                Save
-              </button>
+              <input type="password" placeholder="Access key" value={accessKey}
+                onChange={(e) => setAccessKey(e.target.value)} style={styles.input} />
+              <button onClick={handleSaveKey} style={styles.keyButton}>Save</button>
             </div>
           ) : (
-            <button
-              onClick={() => setShowKeyInput(true)}
-              style={styles.keyButton}
-            >
-              Set Key
-            </button>
+            <button onClick={() => setShowKeyInput(true)} style={styles.keyButton}>Set Key</button>
           )}
         </div>
       </header>
 
+      <section
+        ref={dropZoneRef}
+        style={styles.dropZone}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={handleDrop}
+        onClick={() => fileInputRef.current?.click()}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".mp3,.m4a,.wav,.ogg,audio/*"
+          style={{ display: "none" }}
+          onChange={(e) => e.target.files?.[0] && handleFileChange(e.target.files[0])}
+        />
+        {audioFile ? (
+          <div style={styles.audioInfo}>
+            <span style={styles.audioName}>{audioFile.name}</span>
+            <span style={styles.audioSize}>
+              ({(audioFile.size / (1024 * 1024)).toFixed(2)} MB)
+            </span>
+          </div>
+        ) : (
+          <div style={styles.dropText}>
+            <span>Drag & drop audio file here</span>
+            <span style={styles.dropOr}>or</span>
+            <span style={styles.chooseFile}>Choose File</span>
+          </div>
+        )}
+        <div style={styles.supportedFormats}>Supported: mp3, m4a, wav, ogg</div>
+      </section>
+
+      {audioUrl && (
+        <audio controls src={audioUrl} style={styles.audioPlayer} />
+      )}
+
+      <section style={styles.keySection}>
+        {storedKey ? (
+          <span style={styles.keyLabel}>Key saved</span>
+        ) : (
+          <input
+            type="password"
+            placeholder="Access key"
+            value={accessKey}
+            onChange={(e) => setAccessKey(e.target.value)}
+            style={styles.input}
+          />
+        )}
+      </section>
+
       <section style={styles.inputSection}>
         <textarea
-          placeholder="Paste transcript here... &#10;&#10;Tip: Include timestamps if available, e.g: &#10;0:00 - Introduction&#10;0:15 - Main topic begins&#10;..."
+          placeholder="Paste transcript here... (Tip: Include timestamps if available)"
           value={transcript}
           onChange={(e) => setTranscript(e.target.value)}
           style={styles.textarea}
@@ -157,14 +239,30 @@ export default function Home() {
       {results.length > 0 && (
         <section style={styles.resultsSection}>
           <h2 style={styles.resultsTitle}>
-            Suggested Cuts ({results.length})
+            Suggested Cuts ({results.length}) — all selected by default
           </h2>
           <div style={styles.resultsList}>
             {results.map((cut, i) => (
-              <div key={i} style={styles.cutCard}>
+              <div
+                key={i}
+                style={{
+                  ...styles.cutCard,
+                  borderColor: selectedCuts.has(i) ? "#3b82f6" : "#333",
+                }}
+                onClick={() => toggleCut(i)}
+              >
                 <div style={styles.cutHeader}>
+                  <input
+                    type="checkbox"
+                    checked={selectedCuts.has(i)}
+                    onChange={() => toggleCut(i)}
+                    style={styles.checkbox}
+                  />
                   <span style={styles.timestamp}>
                     {cut.timestamp || "N/A"}
+                  </span>
+                  <span style={selectedCuts.has(i) ? styles.selected : styles.deselected}>
+                    {selectedCuts.has(i) ? "Selected" : "Deselected"}
                   </span>
                 </div>
                 <div style={styles.cutOriginal}>
@@ -181,9 +279,45 @@ export default function Home() {
           </div>
         </section>
       )}
+
+      {results.length > 0 && (
+        <section style={styles.actionSection}>
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            style={{
+              ...styles.exportButton,
+              opacity: exporting ? 0.6 : 1,
+              cursor: exporting ? "not-allowed" : "pointer",
+            }}
+          >
+            {exporting
+              ? `Exporting... ${Math.round(exportProgress)}%`
+              : `Export Audio (MP3) — ${selectedCuts.size} cuts`}
+          </button>
+        </section>
+      )}
+
+      {!ffmpegLoaded && (
+        <div style={styles.loadingFFmpeg}>Loading audio processor...</div>
+      )}
     </main>
   );
 }
+
+const handleSaveKey = () => {
+  if (accessKey) {
+    localStorage.setItem("audio-trimmer-key", accessKey);
+    setStoredKey(accessKey);
+    setShowKeyInput(false);
+  }
+};
+
+const handleClearKey = () => {
+  localStorage.removeItem("audio-trimmer-key");
+  setStoredKey(null);
+  setAccessKey("");
+};
 
 const styles: { [key: string]: React.CSSProperties } = {
   main: {
@@ -243,6 +377,52 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: "#e5e5e5",
     cursor: "pointer",
   },
+  dropZone: {
+    padding: "32px",
+    border: "2px dashed #333",
+    borderRadius: "12px",
+    textAlign: "center",
+    cursor: "pointer",
+    transition: "border-color 0.2s",
+  },
+  dropText: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "8px",
+    color: "#888",
+    fontSize: "16px",
+  },
+  dropOr: {
+    color: "#555",
+    fontSize: "14px",
+  },
+  chooseFile: {
+    color: "#3b82f6",
+    fontSize: "14px",
+  },
+  supportedFormats: {
+    marginTop: "8px",
+    fontSize: "12px",
+    color: "#555",
+  },
+  audioInfo: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "4px",
+  },
+  audioName: {
+    color: "#4ade80",
+    fontSize: "16px",
+    fontWeight: "500",
+  },
+  audioSize: {
+    color: "#888",
+    fontSize: "14px",
+  },
+  audioPlayer: {
+    width: "100%",
+    height: "40px",
+  },
   inputSection: {
     flex: 1,
     display: "flex",
@@ -250,7 +430,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   textarea: {
     flex: 1,
-    minHeight: "300px",
+    minHeight: "200px",
     padding: "16px",
     fontSize: "14px",
     lineHeight: "1.6",
@@ -263,6 +443,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   actionSection: {
     display: "flex",
     justifyContent: "center",
+    gap: "12px",
   },
   analyzeButton: {
     padding: "12px 48px",
@@ -271,6 +452,16 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: "8px",
     border: "none",
     background: "#3b82f6",
+    color: "#fff",
+    transition: "opacity 0.2s",
+  },
+  exportButton: {
+    padding: "12px 48px",
+    fontSize: "16px",
+    fontWeight: "600",
+    borderRadius: "8px",
+    border: "none",
+    background: "#10b981",
     color: "#fff",
     transition: "opacity 0.2s",
   },
@@ -300,15 +491,22 @@ const styles: { [key: string]: React.CSSProperties } = {
     padding: "16px",
     borderRadius: "8px",
     background: "#1a1a1a",
-    border: "1px solid #333",
+    border: "2px solid #333",
+    cursor: "pointer",
     display: "flex",
     flexDirection: "column",
     gap: "8px",
+    transition: "border-color 0.2s",
   },
   cutHeader: {
     display: "flex",
     alignItems: "center",
     gap: "8px",
+  },
+  checkbox: {
+    width: "18px",
+    height: "18px",
+    cursor: "pointer",
   },
   timestamp: {
     fontSize: "12px",
@@ -317,6 +515,16 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: "4px",
     background: "#333",
     color: "#a5b4fc",
+  },
+  selected: {
+    fontSize: "12px",
+    color: "#4ade80",
+    marginLeft: "auto",
+  },
+  deselected: {
+    fontSize: "12px",
+    color: "#888",
+    marginLeft: "auto",
   },
   cutOriginal: {
     fontSize: "14px",
@@ -333,5 +541,13 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: "#a3a3a3",
     lineHeight: "1.5",
     fontStyle: "italic",
+  },
+  loadingFFmpeg: {
+    padding: "12px 16px",
+    borderRadius: "8px",
+    background: "#1a1a1a",
+    color: "#888",
+    fontSize: "14px",
+    textAlign: "center",
   },
 };
