@@ -119,6 +119,9 @@ ${transcript}`;
     let text = data.choices?.[0]?.message?.content || "";
     console.log("[Analyze] Raw text length:", text.length);
 
+    // Strip markdown code block markers
+    text = text.replace(/^```json\s*/i, "").replace(/\s*```$/i, "");
+
     // Strip <think>... tags
     const thinkMatch = text.match(/<\/think>\s*([\s\S]*?)\s*$/);
     if (thinkMatch) {
