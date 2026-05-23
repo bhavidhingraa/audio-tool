@@ -122,9 +122,16 @@ export async function processAudio(
 }
 
 export function timestampToSeconds(timestamp: string): number {
-  const match = timestamp.match(/(\d+):(\d+)(?::(\d+))?/);
-  if (!match) return 0;
+  const match = timestamp.match(/^(\d+):(\d+):(\d+):(\d+)$/);
+  if (match) {
+    const hours = parseInt(match[1], 10);
+    const minutes = parseInt(match[2], 10);
+    const seconds = parseInt(match[3], 10);
+    const ms = parseInt(match[4], 10) / 1000;
+    return hours * 3600 + minutes * 60 + seconds + ms;
+  }
 
+  // Fallback: try MM:SS or HH:MM:SS without ms
   const parts = timestamp.split(":").map(Number);
   if (parts.length === 2) {
     return parts[0] * 60 + parts[1];
